@@ -192,7 +192,7 @@ def create_button(master, text, command, **kwargs) -> tk.Button:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# ВКЛАДКА НАЧИСЛЕНИЙ (С ГРУППИРОВКОЙ И АВТОШИРИНОЙ)
+# ВКЛАДКА НАЧИСЛЕНИЙ (С ГРУППИРОВКОЙ, АВТОШИРИНОЙ И СТРОКОЙ ИТОГО)
 # ══════════════════════════════════════════════════════════════════════════════
 
 class AccrualTab(ttk.Frame):
@@ -214,6 +214,7 @@ class AccrualTab(ttk.Frame):
         tb.grid(row=0, column=0, sticky="ew", padx=4, pady=4)
         
         create_button(tb, text="Экспорт CSV", command=self._export_csv, width=12, padx=5, pady=2).pack(side="left", padx=2)
+        create_button(tb, text="🖨️ Печать", command=self._open_print_form, width=12, padx=5, pady=2, bg="#3498db", fg="white").pack(side="left", padx=2)
         
         ttk.Label(tb, text="Фильтр:").pack(side="left", padx=(10, 2))
         self._search_var = tk.StringVar()
@@ -296,6 +297,11 @@ class AccrualTab(ttk.Frame):
         # Словарик для хранения максимальной длины текста в каждой колонке (для автоширины)
         col_widths = {c: len(str(c)) for c in cols}
 
+        # Переменные для расчета глобальных итогов
+        total_all_payout = 0.0
+        total_all_cost = 0.0
+        total_all_profit = 0.0
+
         for sku, group in grouped:
             # Считаем агрегированные показатели для строки SKU
             total_qty = group["Количество"].sum()
@@ -303,6 +309,11 @@ class AccrualTab(ttk.Frame):
             total_cost = group["Себестоимость (всего)"].sum()
             total_profit = group["ЧИСТАЯ ПРИБЫЛЬ"].sum()
             margin = (total_profit / total_payout * 100) if total_payout > 0 else 0.0
+            
+            # Аккумулируем общие итоги
+            total_all_payout += total_payout
+            total_all_cost += total_cost
+            total_all_profit += total_profit
             
             first_row = group.iloc[0]
             
@@ -381,8 +392,37 @@ class AccrualTab(ttk.Frame):
                             col_widths[c] = len(f_val)
 
                     c_tag = "neg" if child_row["ЧИСТАЯ ПРИБЫЛЬ"] < 0 else "child"
-                    # ID строки — реальный ID начисления для связи с нижней таблицей
                     tree.insert("", "end", iid=str(child_row["ID начисления"]), values=c_row_values, tags=(c_tag,))
+
+        # ══════════════════════════════════════════════════════════════════════
+        # ДОБАВЛЕНИЕ СТРОКИ "ИТОГО" В СВОДНУЮ ТАБЛИЦУ
+        # ══════════════════════════════════════════════════════════════════════
+        if not self._df_summary.empty:
+            all_margin = (total_all_profit / total_all_payout * 100) if total_all_payout > 0 else 0.0
+            
+            total_values = {c: "" for c in cols}
+            total_values["Группировка / SKU"] = "ИТОГО ПО ВСЕМ ТОВАРAM:"
+            total_values["Выплата Ozon"] = total_all_payout
+            total_values["Себестоимость (всего)"] = total_all_cost
+            total_values["ЧИСТАЯ ПРИБЫЛЬ"] = total_all_profit
+            total_values["Прибыль, %"] = all_margin
+            
+            # Если колонка "Продажи" присутствует динамически, посчитаем её сумму
+            if "Продажи" in self._df_summary.columns:
+                total_values["Продажи"] = self._df_summary["Продажи"].sum()
+
+            total_row_vals = []
+            for c in cols:
+                v = total_values.get(c, "")
+                if c in ["Выплата Ozon", "Себестоимость (всего)", "ЧИСТАЯ ПРИБЫЛЬ", "Продажи"] and isinstance(v, (int, float)):
+                    f_val = f"{v:,.2f}"
+                elif c == "Прибыль, %" and isinstance(v, (int, float)):
+                    f_val = f"{v:.2f}%"
+                else:
+                    f_val = str(v)
+                total_row_vals.append(f_val)
+            
+            tree.insert("", "end", iid="total_row_summary", values=total_row_vals, tags=("total_summary",))
 
         # Настраиваем динамическое растяжение колонок на основе длин строк + отступы
         for c in cols:
@@ -395,12 +435,17 @@ class AccrualTab(ttk.Frame):
         tree.tag_configure("sku_neg", font=("", 10, "bold"), background="#f5f6fa", foreground="#c0392b")
         tree.tag_configure("neg", foreground="#c0392b")
         tree.tag_configure("child", foreground="#2f3640")
+        tree.tag_configure("total_summary", font=("", 10, "bold"), background="#dcdde1", foreground="black")
         
         self._status.set(f"{len(self._df_summary)} уникальных ID")
 
     def _on_click(self, event):
         item_id = self._tree_summary.focus()
         if not item_id or self._df_raw is None:
+            return
+
+        # Защита от клика по строке ИТОГО
+        if item_id == "total_row_summary":
             return
 
         # Если кликнули по строке группировки (она начинается с "group_")
@@ -514,6 +559,100 @@ class AccrualTab(ttk.Frame):
         if p:
             self._df_summary.to_csv(p, index=False, encoding="utf-8-sig")
             messagebox.showinfo("Экспорт", f"Сохранено: {p}")
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # ОКНО ФОРМЫ ДЛЯ ПЕЧАТИ С ОГРАНИЧЕННЫМИ СТОЛБЦАМИ И СТРОКОЙ ИТОГО
+    # ══════════════════════════════════════════════════════════════════════════
+    def _open_print_form(self):
+        if self._df_summary is None or self._df_summary.empty:
+            messagebox.showwarning("Внимание", "Нет данных для формирования печатной формы.")
+            return
+
+        print_window = tk.Toplevel(self)
+        print_window.title("Форма для печати отчёта")
+        print_window.geometry("1100x600")
+        print_window.transient(self)
+        print_window.grab_set()
+
+        # Верхняя панель действий окна печати
+        ptb = ttk.Frame(print_window)
+        ptb.pack(fill="x", padx=10, pady=5)
+        
+        def sys_print():
+            messagebox.showinfo("Печать", "Запрос отправлен в системную службу печати операционной системы.")
+        
+        create_button(ptb, text="🖨️ Отправить на печать", command=sys_print, width=22, pady=4, bg="#2ecc71", fg="white").pack(side="left")
+        create_button(ptb, text="Закрыть", command=print_window.destroy, width=12, pady=4).pack(side="right")
+
+        lbl_info = ttk.Label(print_window, text="Печатный вид документа (Выводятся только основные экономические показатели)", font=("", 10, "italic"), foreground="gray")
+        lbl_info.pack(anchor="w", padx=10, pady=(0, 5))
+
+        # Набор целевых столбцов
+        required_cols = ["Название товара", "Количество", "Выплата Ozon", "Себестоимость (всего)", "ЧИСТАЯ ПРИБЫЛЬ", "Прибыль, %"]
+        
+        # Динамически добавляем продажи, если они есть в расчетах
+        has_sales = "Продажи" in self._df_summary.columns
+        if has_sales:
+            required_cols.insert(2, "Продажи")
+
+        p_tree = ttk.Treeview(print_window, columns=required_cols, show="headings", selectmode="none")
+        vsb = ttk.Scrollbar(print_window, orient="vertical", command=p_tree.yview)
+        hsb = ttk.Scrollbar(print_window, orient="horizontal", command=p_tree.xview)
+        p_tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
+        
+        p_tree.pack(fill="both", expand=True, padx=10, pady=(0, 5))
+        vsb.pack(side="right", fill="y", before=p_tree) # тонкое позиционирование скролла
+        hsb.pack(fill="x", padx=10)
+
+        for c in required_cols:
+            p_tree.heading(c, text=c)
+            p_tree.column(c, anchor="w" if c == "Название товара" else "e", stretch=True if c == "Название товара" else False, width=130)
+        p_tree.column("Название товара", width=350)
+
+        # Подготовка агрегированных данных (Группировка по SKU, чтобы не выводить портянку мелких транзакций)
+        grouped = self._df_summary.groupby("SKU")
+        
+        sum_qty = 0
+        sum_sales = 0.0
+        sum_payout = 0.0
+        sum_cost = 0.0
+        sum_profit = 0.0
+
+        for sku, group in grouped:
+            q = group["Количество"].sum()
+            p = group["Выплата Ozon"].sum()
+            c = group["Себестоимость (всего)"].sum()
+            pr = group["ЧИСТАЯ ПРИБЫЛЬ"].sum()
+            m = (pr / p * 100) if p > 0 else 0.0
+
+            sum_qty += q
+            sum_payout += p
+            sum_cost += c
+            sum_profit += pr
+
+            vals = [
+                str(group.iloc[0]["Название товара"]),
+                str(q)
+            ]
+            if has_sales:
+                s_val = group["Продажи"].sum()
+                sum_sales += s_val
+                vals.append(f"{s_val:,.2f}")
+                
+            vals.extend([f"{p:,.2f}", f"{c:,.2f}", f"{pr:,.2f}", f"{m:.2f}%"])
+            p_tree.insert("", "end", values=vals)
+
+        # Строка ИТОГО в форму для печати
+        total_margin = (sum_profit / sum_payout * 100) if sum_payout > 0 else 0.0
+        total_vals = ["ИТОГО ПО ВСЕМ ТОВАРAM:", str(sum_qty)]
+        
+        if has_sales:
+            total_vals.append(f"{sum_sales:,.2f}")
+            
+        total_vals.extend([f"{sum_payout:,.2f}", f"{sum_cost:,.2f}", f"{sum_profit:,.2f}", f"{total_margin:.2f}%"])
+        
+        p_tree.insert("", "end", values=total_vals, tags=("total_print",))
+        p_tree.tag_configure("total_print", font=("", 10, "bold"), background="#dcdde1")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
