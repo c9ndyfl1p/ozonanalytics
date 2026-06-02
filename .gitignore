@@ -1,0 +1,6 @@
+*.xlsx
+*.xls
+*.pptx
+.DS_Store
+costs_db.json
+__pycache__/
