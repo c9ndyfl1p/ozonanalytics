@@ -203,7 +203,7 @@ class AccrualTab(ttk.Frame):
         self._df_summary: pd.DataFrame | None = None
         self._sort_col: str | None = None
         self._sort_asc: bool = True
-        self._expanded_skus = set()  # Хранит список раскрытых SKU
+        self._expanded_skus = set()
         self._build_ui()
 
     def _build_ui(self):
@@ -231,7 +231,6 @@ class AccrualTab(ttk.Frame):
         top.columnconfigure(0, weight=1)
         top.rowconfigure(0, weight=1)
 
-        # Главная таблица со скрытой первой колонкой Tree для иконок раскрытия
         self._tree_summary = ttk.Treeview(top, show="headings", selectmode="browse")
         vsb1 = ttk.Scrollbar(top, orient="vertical",   command=self._tree_summary.yview)
         hsb1 = ttk.Scrollbar(top, orient="horizontal", command=self._tree_summary.xview)
@@ -240,7 +239,6 @@ class AccrualTab(ttk.Frame):
         vsb1.grid(row=0, column=1, sticky="ns")
         hsb1.grid(row=1, column=0, sticky="ew")
         
-        # Биндим одинарный клик для раскрытия/закрытия SKU и заполнения деталей
         self._tree_summary.bind("<ButtonRelease-1>", self._on_click)
 
         bot_nb = ttk.Notebook(paned)
@@ -278,7 +276,6 @@ class AccrualTab(ttk.Frame):
         tree = self._tree_summary
         tree.delete(*tree.get_children())
         
-        # Формируем список колонок: на первом месте колонка группировки
         base_cols = list(self._df_summary.columns)
         if "ID начисления" in base_cols:
             base_cols.remove("ID начисления")
@@ -286,38 +283,29 @@ class AccrualTab(ttk.Frame):
         cols = ["Группировка / SKU"] + base_cols
         tree["columns"] = cols
 
-        # Настройка заголовков
         for c in cols:
             tree.heading(c, text=c, command=lambda _c=c: self._sort(_c))
         
-        # Группируем данные в памяти по SKU для создания структуры родитель-потомок
         grouped = self._df_summary.groupby("SKU")
         money_cols = {c for c in cols if c not in NON_MONEY}
-
-        # Словарик для хранения максимальной длины текста в каждой колонке (для автоширины)
         col_widths = {c: len(str(c)) for c in cols}
 
-        # Переменные для расчета глобальных итогов
         total_all_payout = 0.0
         total_all_cost = 0.0
         total_all_profit = 0.0
 
         for sku, group in grouped:
-            # Считаем агрегированные показатели для строки SKU
             total_qty = group["Количество"].sum()
             total_payout = group["Выплата Ozon"].sum()
             total_cost = group["Себестоимость (всего)"].sum()
             total_profit = group["ЧИСТАЯ ПРИБЫЛЬ"].sum()
             margin = (total_profit / total_payout * 100) if total_payout > 0 else 0.0
             
-            # Аккумулируем общие итоги
             total_all_payout += total_payout
             total_all_cost += total_cost
             total_all_profit += total_profit
             
             first_row = group.iloc[0]
-            
-            # Статусный префикс группы
             prefix = "▼ " if sku in self._expanded_skus else "▶ "
             
             sku_values = {
@@ -334,12 +322,10 @@ class AccrualTab(ttk.Frame):
                 "Прибыль, %": margin
             }
             
-            # Добавляем динамические услуги
             for c in cols:
                 if c not in sku_values and c in group.columns:
                     sku_values[c] = group[c].sum()
 
-            # Форматируем значения для вывода
             row_values = []
             for c in cols:
                 v = sku_values.get(c, "")
@@ -358,7 +344,6 @@ class AccrualTab(ttk.Frame):
             parent_id = f"group_{sku}"
             tree.insert("", "end", iid=parent_id, values=row_values, tags=(sku_tag,))
 
-            # Если SKU раскрыт, выводим под ним дочерние транзакции (ID начислений)
             if sku in self._expanded_skus:
                 for _, child_row in group.iterrows():
                     child_values = {
@@ -394,9 +379,6 @@ class AccrualTab(ttk.Frame):
                     c_tag = "neg" if child_row["ЧИСТАЯ ПРИБЫЛЬ"] < 0 else "child"
                     tree.insert("", "end", iid=str(child_row["ID начисления"]), values=c_row_values, tags=(c_tag,))
 
-        # ══════════════════════════════════════════════════════════════════════
-        # ДОБАВЛЕНИЕ СТРОКИ "ИТОГО" В СВОДНУЮ ТАБЛИЦУ
-        # ══════════════════════════════════════════════════════════════════════
         if not self._df_summary.empty:
             all_margin = (total_all_profit / total_all_payout * 100) if total_all_payout > 0 else 0.0
             
@@ -407,7 +389,6 @@ class AccrualTab(ttk.Frame):
             total_values["ЧИСТАЯ ПРИБЫЛЬ"] = total_all_profit
             total_values["Прибыль, %"] = all_margin
             
-            # Если колонка "Продажи" присутствует динамически, посчитаем её сумму
             if "Продажи" in self._df_summary.columns:
                 total_values["Продажи"] = self._df_summary["Продажи"].sum()
 
@@ -424,11 +405,10 @@ class AccrualTab(ttk.Frame):
             
             tree.insert("", "end", iid="total_row_summary", values=total_row_vals, tags=("total_summary",))
 
-        # Настраиваем динамическое растяжение колонок на основе длин строк + отступы
         for c in cols:
             calculated_width = max(col_widths[c] * 8 + 20, 100)
             if c == "Название товара":
-                calculated_width = min(calculated_width, 400) # Ограничим гигантские названия
+                calculated_width = min(calculated_width, 400)
             tree.column(c, width=calculated_width, anchor="w" if c in LEFT_COLS else "e", stretch=False)
 
         tree.tag_configure("sku_group", font=("", 10, "bold"), background="#f5f6fa")
@@ -444,20 +424,17 @@ class AccrualTab(ttk.Frame):
         if not item_id or self._df_raw is None:
             return
 
-        # Защита от клика по строке ИТОГО
         if item_id == "total_row_summary":
             return
 
-        # Если кликнули по строке группировки (она начинается с "group_")
         if item_id.startswith("group_"):
             sku = item_id.replace("group_", "")
             if sku in self._expanded_skus:
                 self._expanded_skus.remove(sku)
             else:
                 self._expanded_skus.add(sku)
-            self._render_summary() # Перерисовываем дерево свернутым/развернутым
+            self._render_summary()
         else:
-            # Если кликнули по конкретному ID начисления, выгружаем детали вниз
             df_detail = self._df_raw[
                 self._df_raw["ID начисления"].astype(str).str.strip() == item_id
             ].copy()
@@ -561,7 +538,7 @@ class AccrualTab(ttk.Frame):
             messagebox.showinfo("Экспорт", f"Сохранено: {p}")
 
     # ══════════════════════════════════════════════════════════════════════════
-    # ОКНО ФОРМЫ ДЛЯ ПЕЧАТИ С ОГРАНИЧЕННЫМИ СТОЛБЦАМИ И СТРОКОЙ ИТОГО
+    # КРОССПЛАТФОРМЕННАЯ ФОРМА ДЛЯ ПЕЧАТИ (ОКНА WINDOWS / MAC С СОХРАНЕНИЕМ В PDF)
     # ══════════════════════════════════════════════════════════════════════════
     def _open_print_form(self):
         if self._df_summary is None or self._df_summary.empty:
@@ -574,23 +551,10 @@ class AccrualTab(ttk.Frame):
         print_window.transient(self)
         print_window.grab_set()
 
-        # Верхняя панель действий окна печати
         ptb = ttk.Frame(print_window)
         ptb.pack(fill="x", padx=10, pady=5)
         
-        def sys_print():
-            messagebox.showinfo("Печать", "Запрос отправлен в системную службу печати операционной системы.")
-        
-        create_button(ptb, text="🖨️ Отправить на печать", command=sys_print, width=22, pady=4, bg="#2ecc71", fg="white").pack(side="left")
-        create_button(ptb, text="Закрыть", command=print_window.destroy, width=12, pady=4).pack(side="right")
-
-        lbl_info = ttk.Label(print_window, text="Печатный вид документа (Выводятся только основные экономические показатели)", font=("", 10, "italic"), foreground="gray")
-        lbl_info.pack(anchor="w", padx=10, pady=(0, 5))
-
-        # Набор целевых столбцов
         required_cols = ["Название товара", "Количество", "Выплата Ozon", "Себестоимость (всего)", "ЧИСТАЯ ПРИБЫЛЬ", "Прибыль, %"]
-        
-        # Динамически добавляем продажи, если они есть в расчетах
         has_sales = "Продажи" in self._df_summary.columns
         if has_sales:
             required_cols.insert(2, "Продажи")
@@ -601,7 +565,7 @@ class AccrualTab(ttk.Frame):
         p_tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
         
         p_tree.pack(fill="both", expand=True, padx=10, pady=(0, 5))
-        vsb.pack(side="right", fill="y", before=p_tree) # тонкое позиционирование скролла
+        vsb.pack(side="right", fill="y", before=p_tree)
         hsb.pack(fill="x", padx=10)
 
         for c in required_cols:
@@ -609,7 +573,6 @@ class AccrualTab(ttk.Frame):
             p_tree.column(c, anchor="w" if c == "Название товара" else "e", stretch=True if c == "Название товара" else False, width=130)
         p_tree.column("Название товара", width=350)
 
-        # Подготовка агрегированных данных (Группировка по SKU, чтобы не выводить портянку мелких транзакций)
         grouped = self._df_summary.groupby("SKU")
         
         sum_qty = 0
@@ -617,6 +580,8 @@ class AccrualTab(ttk.Frame):
         sum_payout = 0.0
         sum_cost = 0.0
         sum_profit = 0.0
+
+        html_rows = []
 
         for sku, group in grouped:
             q = group["Количество"].sum()
@@ -630,29 +595,101 @@ class AccrualTab(ttk.Frame):
             sum_cost += c
             sum_profit += pr
 
-            vals = [
-                str(group.iloc[0]["Название товара"]),
-                str(q)
-            ]
+            name_str = str(group.iloc[0]["Название товара"])
+            vals = [name_str, str(q)]
+            
+            html_tds = f"<td>{name_str}</td><td>{q}</td>"
+            
             if has_sales:
                 s_val = group["Продажи"].sum()
                 sum_sales += s_val
                 vals.append(f"{s_val:,.2f}")
+                html_tds += f"<td>{s_val:,.2f}</td>"
                 
             vals.extend([f"{p:,.2f}", f"{c:,.2f}", f"{pr:,.2f}", f"{m:.2f}%"])
+            html_tds += f"<td>{p:,.2f}</td><td>{c:,.2f}</td><td>{pr:,.2f}</td><td>{m:.2f}%</td>"
+            
             p_tree.insert("", "end", values=vals)
+            html_rows.append(f"<tr>{html_tds}</tr>")
 
-        # Строка ИТОГО в форму для печати
         total_margin = (sum_profit / sum_payout * 100) if sum_payout > 0 else 0.0
         total_vals = ["ИТОГО ПО ВСЕМ ТОВАРAM:", str(sum_qty)]
         
+        html_total_tds = f"<td class='bold'>ИТОГО ПО ВСЕМ ТОВАРAM:</td><td class='bold'>{sum_qty}</td>"
+        
         if has_sales:
             total_vals.append(f"{sum_sales:,.2f}")
+            html_total_tds += f"<td class='bold'>{sum_sales:,.2f}</td>"
             
         total_vals.extend([f"{sum_payout:,.2f}", f"{sum_cost:,.2f}", f"{sum_profit:,.2f}", f"{total_margin:.2f}%"])
+        html_total_tds += f"<td class='bold'>{sum_payout:,.2f}</td><td class='bold'>{sum_cost:,.2f}</td><td class='bold'>{sum_profit:,.2f}</td><td class='bold'>{total_margin:.2f}%</td>"
         
         p_tree.insert("", "end", values=total_vals, tags=("total_print",))
+        p_tree.column("Название товара", width=350)
         p_tree.tag_configure("total_print", font=("", 10, "bold"), background="#dcdde1")
+
+        def sys_print():
+            import tempfile
+            import os
+            import platform
+            import subprocess
+            
+            th_elements = "".join([f"<th>{col}</th>" for col in required_cols])
+            
+            html_content = f"""
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <meta charset="utf-8">
+                <title>Печать отчёта Ozon</title>
+                <style>
+                    body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 20px; }}
+                    h2 {{ text-align: center; margin-bottom: 20px; }}
+                    table {{ width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 12px; }}
+                    th, td {{ border: 1px solid #111; padding: 6px 8px; text-align: left; }}
+                    th {{ background-color: #f2f2f2; }}
+                    td:not(:first-child), th:not(:first-child) {{ text-align: right; }}
+                    .bold {{ font-weight: bold; background-color: #eaeaea; }}
+                    @media print {{
+                        button {{ display: none; }}
+                    }}
+                </style>
+            </head>
+            <body>
+                <h2>Отчёт по начислениям Ozon</h2>
+                <table>
+                    <thead><tr>{th_elements}</tr></thead>
+                    <tbody>
+                        {"".join(html_rows)}
+                        <tr class="bold">{html_total_tds}</tr>
+                    </tbody>
+                </table>
+                <script>
+                    window.onload = function() {{ 
+                        window.print(); 
+                    }}
+                </script>
+            </body>
+            </html>
+            """
+            
+            with tempfile.NamedTemporaryFile(suffix=".html", delete=False, mode="w", encoding="utf-8") as f:
+                f.write(html_content)
+                temp_path = f.name
+                
+            current_os = platform.system()
+            if current_os == "Darwin":
+                subprocess.run(["open", temp_path])
+            elif current_os == "Windows":
+                os.startfile(temp_path)
+            else:
+                subprocess.run(["xdg-open", temp_path])
+
+        create_button(ptb, text="🖨️ Отправить на печать", command=sys_print, width=22, pady=4, bg="#2ecc71", fg="white").pack(side="left")
+        create_button(ptb, text="Закрыть", command=print_window.destroy, width=12, pady=4).pack(side="right")
+
+        lbl_info = ttk.Label(print_window, text="Печатный вид документа (Выводятся только основные экономические показатели)", font=("", 10, "italic"), foreground="gray")
+        lbl_info.pack(anchor="w", padx=10, pady=(0, 5))
 
 
 # ══════════════════════════════════════════════════════════════════════════════
